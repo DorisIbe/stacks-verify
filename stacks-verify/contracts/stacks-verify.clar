@@ -91,3 +91,200 @@
         (get is-trusted (map-get? trusted-issuers { issuer: issuer }))
     )
 )
+
+;; Core Identity Management Functions
+(define-public (create-identity (metadata-hash (string-ascii 64)))
+    (let (
+            (identity-id (var-get next-identity-id))
+            (current-block stacks-block-height)
+        )
+        ;; Check if identity already exists
+        (asserts! (is-none (map-get? principal-to-identity { owner: tx-sender }))
+            ERR_IDENTITY_EXISTS
+        )
+        ;; Create identity record
+        (map-set identities { identity-id: identity-id } {
+            owner: tx-sender,
+            created-at: current-block,
+            updated-at: current-block,
+            reputation-score: u0,
+            is-verified: false,
+            metadata-hash: metadata-hash,
+        })
+        ;; Map principal to identity
+        (map-set principal-to-identity { owner: tx-sender } { identity-id: identity-id })
+        ;; Increment identity counter
+        (var-set next-identity-id (+ identity-id u1))
+        (ok identity-id)
+    )
+)
+
+(define-public (update-identity-metadata (metadata-hash (string-ascii 64)))
+    (let (
+            (identity-lookup (unwrap! (map-get? principal-to-identity { owner: tx-sender })
+                ERR_IDENTITY_NOT_FOUND
+            ))
+            (identity-id (get identity-id identity-lookup))
+            (current-identity (unwrap! (get-identity identity-id) ERR_IDENTITY_NOT_FOUND))
+        )
+        (map-set identities { identity-id: identity-id }
+            (merge current-identity {
+                metadata-hash: metadata-hash,
+                updated-at: stacks-block-height,
+            })
+        )
+        (ok true)
+    )
+)
+
+;; Credential Management Functions
+(define-public (issue-credential
+        (identity-id uint)
+        (credential-type (string-ascii 32))
+        (expires-at uint)
+        (data-hash (string-ascii 64))
+    )
+    (let (
+            (credential-id (var-get next-credential-id))
+            (current-block stacks-block-height)
+            (identity-data (unwrap! (get-identity identity-id) ERR_IDENTITY_NOT_FOUND))
+        )
+        ;; Check if issuer is trusted or is the identity owner
+        (asserts!
+            (or
+                (is-trusted-issuer tx-sender)
+                (is-eq tx-sender (get owner identity-data))
+                (is-eq tx-sender (var-get contract-owner))
+            )
+            ERR_UNAUTHORIZED
+        )
+        ;; Check expiration date is in the future
+        (asserts! (> expires-at current-block) ERR_INVALID_CREDENTIAL)
+        ;; Create credential
+        (map-set credentials { credential-id: credential-id } {
+            identity-id: identity-id,
+            credential-type: credential-type,
+            issuer: tx-sender,
+            issued-at: current-block,
+            expires-at: expires-at,
+            is-revoked: false,
+            data-hash: data-hash,
+            verification-status: "pending",
+        })
+        ;; Map identity to credential
+        (map-set identity-credentials {
+            identity-id: identity-id,
+            credential-type: credential-type,
+        } { credential-id: credential-id }
+        )
+        ;; Increment credential counter
+        (var-set next-credential-id (+ credential-id u1))
+        (ok credential-id)
+    )
+)
+
+(define-public (verify-credential (credential-id uint))
+    (let ((credential (unwrap! (get-credential credential-id) ERR_INVALID_CREDENTIAL)))
+        ;; Only trusted issuers or contract owner can verify
+        (asserts!
+            (or
+                (is-trusted-issuer tx-sender)
+                (is-eq tx-sender (var-get contract-owner))
+            )
+            ERR_UNAUTHORIZED
+        )
+        ;; Check credential is not revoked and not expired
+        (asserts! (not (get is-revoked credential)) ERR_INVALID_CREDENTIAL)
+        (asserts! (> (get expires-at credential) stacks-block-height)
+            ERR_CREDENTIAL_EXPIRED
+        )
+        ;; Update verification status
+        (map-set credentials { credential-id: credential-id }
+            (merge credential { verification-status: "verified" })
+        )
+        (ok true)
+    )
+)
+
+(define-public (revoke-credential (credential-id uint))
+    (let ((credential (unwrap! (get-credential credential-id) ERR_INVALID_CREDENTIAL)))
+        ;; Only issuer or contract owner can revoke
+        (asserts!
+            (or
+                (is-eq tx-sender (get issuer credential))
+                (is-eq tx-sender (var-get contract-owner))
+            )
+            ERR_UNAUTHORIZED
+        )
+        ;; Revoke credential
+        (map-set credentials { credential-id: credential-id }
+            (merge credential {
+                is-revoked: true,
+                verification-status: "revoked",
+            })
+        )
+        (ok true)
+    )
+)
+
+;; Verification Functions
+(define-read-only (is-credential-valid (credential-id uint))
+    (match (get-credential credential-id)
+        credential (and
+            (not (get is-revoked credential))
+            (> (get expires-at credential) stacks-block-height)
+            (is-eq (get verification-status credential) "verified")
+        )
+        false
+    )
+)
+
+(define-read-only (get-identity-credential
+        (identity-id uint)
+        (credential-type (string-ascii 32))
+    )
+    (match (map-get? identity-credentials {
+        identity-id: identity-id,
+        credential-type: credential-type,
+    })
+        cred-ref (get-credential (get credential-id cred-ref))
+        none
+    )
+)
+
+(define-read-only (has-valid-credential
+        (identity-id uint)
+        (credential-type (string-ascii 32))
+    )
+    (match (map-get? identity-credentials {
+        identity-id: identity-id,
+        credential-type: credential-type,
+    })
+        cred-ref (is-credential-valid (get credential-id cred-ref))
+        false
+    )
+)
+
+;; Issuer Management
+(define-public (add-trusted-issuer
+        (issuer principal)
+        (issuer-type (string-ascii 32))
+    )
+    (begin
+        (asserts! (is-eq tx-sender (var-get contract-owner)) ERR_UNAUTHORIZED)
+        (map-set trusted-issuers { issuer: issuer } {
+            is-trusted: true,
+            added-at: stacks-block-height,
+            issuer-type: issuer-type,
+        })
+        (ok true)
+    )
+)
+
+(define-public (remove-trusted-issuer (issuer principal))
+    (begin
+        (asserts! (is-eq tx-sender (var-get contract-owner)) ERR_UNAUTHORIZED)
+        (map-delete trusted-issuers { issuer: issuer })
+        (ok true)
+    )
+)
