@@ -35,3 +35,59 @@
     { owner: principal }
     { identity-id: uint }
 )
+
+;; Credential Structure
+(define-map credentials
+    { credential-id: uint }
+    {
+        identity-id: uint,
+        credential-type: (string-ascii 32),
+        issuer: principal,
+        issued-at: uint,
+        expires-at: uint,
+        is-revoked: bool,
+        data-hash: (string-ascii 64),
+        verification-status: (string-ascii 16),
+    }
+)
+
+;; Identity Credentials mapping
+(define-map identity-credentials
+    {
+        identity-id: uint,
+        credential-type: (string-ascii 32),
+    }
+    { credential-id: uint }
+)
+
+;; Trusted Issuers
+(define-map trusted-issuers
+    { issuer: principal }
+    {
+        is-trusted: bool,
+        added-at: uint,
+        issuer-type: (string-ascii 32),
+    }
+)
+
+;; Read-only functions
+(define-read-only (get-identity (identity-id uint))
+    (map-get? identities { identity-id: identity-id })
+)
+
+(define-read-only (get-identity-by-principal (owner principal))
+    (match (map-get? principal-to-identity { owner: owner })
+        identity-data (get-identity (get identity-id identity-data))
+        none
+    )
+)
+
+(define-read-only (get-credential (credential-id uint))
+    (map-get? credentials { credential-id: credential-id })
+)
+
+(define-read-only (is-trusted-issuer (issuer principal))
+    (default-to false
+        (get is-trusted (map-get? trusted-issuers { issuer: issuer }))
+    )
+)
