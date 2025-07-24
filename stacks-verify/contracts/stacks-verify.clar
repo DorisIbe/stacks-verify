@@ -418,3 +418,54 @@
         (ok true)
     )
 )
+
+;; Governance Functions
+(define-public (set-reputation-threshold (new-threshold uint))
+    (begin
+        (asserts! (is-eq tx-sender (var-get contract-owner)) ERR_UNAUTHORIZED)
+        (var-set min-reputation-threshold new-threshold)
+        (ok true)
+    )
+)
+
+(define-public (transfer-ownership (new-owner principal))
+    (begin
+        (asserts! (is-eq tx-sender (var-get contract-owner)) ERR_UNAUTHORIZED)
+        (var-set contract-owner new-owner)
+        (ok true)
+    )
+)
+
+;; Cross-Platform Integration APIs
+(define-read-only (verify-identity-api (identity-id uint))
+    (match (get-identity identity-id)
+        identity
+        {
+            exists: true,
+            is-verified: (get is-verified identity),
+            reputation-score: (get reputation-score identity),
+            meets-threshold: (meets-reputation-threshold identity-id),
+        }
+        {
+            exists: false,
+            is-verified: false,
+            reputation-score: u0,
+            meets-threshold: false,
+        }
+    )
+)
+
+(define-read-only (bulk-verify-credentials
+        (identity-id uint)
+        (credential-types (list 10 (string-ascii 32)))
+    )
+    (map has-valid-credential
+        (list
+            identity-id             identity-id             identity-id
+            identity-id             identity-id
+            identity-id             identity-id             identity-id
+            identity-id             identity-id
+        )
+        credential-types
+    )
+)
