@@ -602,4 +602,243 @@ describe("Stacks Verify Contract", () => {
       expect(result).toBeBool(true);
     });
   });
+
+  describe("Trusted Issuer Management", () => {
+    it("should add trusted issuer successfully", () => {
+      const issuerType = "university";
+      
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "add-trusted-issuer",
+        [Cl.principal(wallet1), Cl.stringAscii(issuerType)],
+        deployer // Only contract owner can add
+      );
+
+      expect(result).toBeOk(Cl.bool(true));
+    });
+
+    it("should prevent non-owner from adding trusted issuer", () => {
+      const issuerType = "university";
+      
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "add-trusted-issuer",
+        [Cl.principal(wallet1), Cl.stringAscii(issuerType)],
+        wallet1 // Non-owner trying to add
+      );
+
+      expect(result).toBeErr(Cl.uint(401)); // ERR_UNAUTHORIZED
+    });
+
+    it("should check if issuer is trusted", () => {
+      const issuerType = "university";
+      
+      // Add trusted issuer first
+      simnet.callPublicFn(
+        contractName,
+        "add-trusted-issuer",
+        [Cl.principal(wallet1), Cl.stringAscii(issuerType)],
+        deployer
+      );
+
+      // Check if issuer is trusted
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "is-trusted-issuer",
+        [Cl.principal(wallet1)],
+        wallet1
+      );
+
+      expect(result).toBeBool(true);
+    });
+
+    it("should return false for non-trusted issuer", () => {
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "is-trusted-issuer",
+        [Cl.principal(wallet2)],
+        wallet1
+      );
+
+      expect(result).toBeBool(false);
+    });
+
+    it("should remove trusted issuer successfully", () => {
+      const issuerType = "university";
+      
+      // Add trusted issuer first
+      simnet.callPublicFn(
+        contractName,
+        "add-trusted-issuer",
+        [Cl.principal(wallet1), Cl.stringAscii(issuerType)],
+        deployer
+      );
+
+      // Remove trusted issuer
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "remove-trusted-issuer",
+        [Cl.principal(wallet1)],
+        deployer
+      );
+
+      expect(result).toBeOk(Cl.bool(true));
+
+      // Verify issuer is no longer trusted
+      const checkResult = simnet.callReadOnlyFn(
+        contractName,
+        "is-trusted-issuer",
+        [Cl.principal(wallet1)],
+        wallet1
+      );
+
+      expect(checkResult.result).toBeBool(false);
+    });
+
+    it("should prevent non-owner from removing trusted issuer", () => {
+      const issuerType = "university";
+      
+      // Add trusted issuer first
+      simnet.callPublicFn(
+        contractName,
+        "add-trusted-issuer",
+        [Cl.principal(wallet1), Cl.stringAscii(issuerType)],
+        deployer
+      );
+
+      // Try to remove as non-owner
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "remove-trusted-issuer",
+        [Cl.principal(wallet1)],
+        wallet1 // Non-owner trying to remove
+      );
+
+      expect(result).toBeErr(Cl.uint(401)); // ERR_UNAUTHORIZED
+    });
+
+    it("should allow trusted issuer to issue credentials", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const issuerType = "university";
+      const credentialType = "education-completion";
+      const dataHash = "QmExampleHashForCredentialData123456789012345678901234";
+      const expiresAt = 1000;
+      
+      // Create identity
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Add trusted issuer
+      simnet.callPublicFn(
+        contractName,
+        "add-trusted-issuer",
+        [Cl.principal(wallet2), Cl.stringAscii(issuerType)],
+        deployer
+      );
+
+      // Trusted issuer issues credential for someone else's identity
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "issue-credential",
+        [
+          Cl.uint(1), // identity-id
+          Cl.stringAscii(credentialType),
+          Cl.uint(expiresAt),
+          Cl.stringAscii(dataHash)
+        ],
+        wallet2 // Trusted issuer
+      );
+
+      expect(result).toBeOk(Cl.uint(1));
+    });
+
+    it("should allow trusted issuer to verify credentials", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const issuerType = "university";
+      const credentialType = "education-completion";
+      const dataHash = "QmExampleHashForCredentialData123456789012345678901234";
+      const expiresAt = 1000;
+      
+      // Create identity and issue credential
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      simnet.callPublicFn(
+        contractName,
+        "issue-credential",
+        [
+          Cl.uint(1),
+          Cl.stringAscii(credentialType),
+          Cl.uint(expiresAt),
+          Cl.stringAscii(dataHash)
+        ],
+        wallet1
+      );
+
+      // Add trusted issuer
+      simnet.callPublicFn(
+        contractName,
+        "add-trusted-issuer",
+        [Cl.principal(wallet2), Cl.stringAscii(issuerType)],
+        deployer
+      );
+
+      // Trusted issuer verifies credential
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "verify-credential",
+        [Cl.uint(1)],
+        wallet2 // Trusted issuer
+      );
+
+      expect(result).toBeOk(Cl.bool(true));
+    });
+
+    it("should allow contract owner to verify credentials", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const credentialType = "education-completion";
+      const dataHash = "QmExampleHashForCredentialData123456789012345678901234";
+      const expiresAt = 1000;
+      
+      // Create identity and issue credential
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      simnet.callPublicFn(
+        contractName,
+        "issue-credential",
+        [
+          Cl.uint(1),
+          Cl.stringAscii(credentialType),
+          Cl.uint(expiresAt),
+          Cl.stringAscii(dataHash)
+        ],
+        wallet1
+      );
+
+      // Contract owner verifies credential
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "verify-credential",
+        [Cl.uint(1)],
+        deployer // Contract owner
+      );
+
+      expect(result).toBeOk(Cl.bool(true));
+    });
+  });
 });
+
+
