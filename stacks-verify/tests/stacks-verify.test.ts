@@ -839,6 +839,357 @@ describe("Stacks Verify Contract", () => {
       expect(result).toBeOk(Cl.bool(true));
     });
   });
+
+  describe("Reputation System", () => {
+    it("should record reputation event successfully", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const eventType = "github-contribution";
+      const dataHash = "QmExampleHashForReputationData123456789012345678901234";
+      
+      // Create identity first
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Record reputation event
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "record-reputation-event",
+        [
+          Cl.uint(1), // identity-id
+          Cl.stringAscii(eventType),
+          Cl.stringAscii(dataHash)
+        ],
+        wallet1 // Identity owner
+      );
+
+      expect(result).toBeOk(Cl.uint(1));
+    });
+
+    it("should update reputation score when recording event", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const eventType = "skill-verification"; // Worth 50 points
+      const dataHash = "QmExampleHashForReputationData123456789012345678901234";
+      
+      // Create identity
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Record reputation event
+      simnet.callPublicFn(
+        contractName,
+        "record-reputation-event",
+        [Cl.uint(1), Cl.stringAscii(eventType), Cl.stringAscii(dataHash)],
+        wallet1
+      );
+
+      // Check reputation score
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "get-reputation-score",
+        [Cl.uint(1)],
+        wallet1
+      );
+
+      expect(result).toBeUint(50); // skill-verification is worth 50 points
+    });
+
+    it("should prevent unauthorized reputation event recording", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const eventType = "github-contribution";
+      const dataHash = "QmExampleHashForReputationData123456789012345678901234";
+      
+      // Create identity with wallet1
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Try to record event from unauthorized wallet2
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "record-reputation-event",
+        [Cl.uint(1), Cl.stringAscii(eventType), Cl.stringAscii(dataHash)],
+        wallet2 // Unauthorized
+      );
+
+      expect(result).toBeErr(Cl.uint(401)); // ERR_UNAUTHORIZED
+    });
+
+    it("should get reputation event by ID", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const eventType = "peer-review";
+      const dataHash = "QmExampleHashForReputationData123456789012345678901234";
+      
+      // Create identity and record event
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      simnet.callPublicFn(
+        contractName,
+        "record-reputation-event",
+        [Cl.uint(1), Cl.stringAscii(eventType), Cl.stringAscii(dataHash)],
+        wallet1
+      );
+
+      // Get reputation event
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "get-reputation-event",
+        [Cl.uint(1)],
+        wallet1
+      );
+
+      expect(result).toBeSome(Cl.tuple({
+        "identity-id": Cl.uint(1),
+        "event-type": Cl.stringAscii(eventType),
+        "reputation-change": Cl.int(25), // peer-review is worth 25 points
+        "verifier": Cl.principal(wallet1),
+        "timestamp": Cl.uint(4),
+        "data-hash": Cl.stringAscii(dataHash)
+      }));
+    });
+
+    it("should get reputation weight for event type", () => {
+      const eventType = "education-completion";
+      
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "get-reputation-weight",
+        [Cl.stringAscii(eventType)],
+        wallet1
+      );
+
+      expect(result).toBeSome(Cl.int(100)); // education-completion is worth 100 points
+    });
+
+    it("should update reputation weight", () => {
+      const eventType = "custom-event";
+      const newWeight = 75;
+      
+      // Update reputation weight
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "update-reputation-weight",
+        [Cl.stringAscii(eventType), Cl.int(newWeight)],
+        deployer // Only contract owner
+      );
+
+      expect(result).toBeOk(Cl.bool(true));
+
+      // Check updated weight
+      const weightResult = simnet.callReadOnlyFn(
+        contractName,
+        "get-reputation-weight",
+        [Cl.stringAscii(eventType)],
+        wallet1
+      );
+
+      expect(weightResult.result).toBeSome(Cl.int(newWeight));
+    });
+
+    it("should prevent non-owner from updating reputation weight", () => {
+      const eventType = "custom-event";
+      const newWeight = 75;
+      
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "update-reputation-weight",
+        [Cl.stringAscii(eventType), Cl.int(newWeight)],
+        wallet1 // Non-owner
+      );
+
+      expect(result).toBeErr(Cl.uint(401)); // ERR_UNAUTHORIZED
+    });
+
+    it("should check if identity meets reputation threshold", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const eventType = "education-completion"; // Worth 100 points
+      const dataHash = "QmExampleHashForReputationData123456789012345678901234";
+      
+      // Create identity
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Record high-value reputation event
+      simnet.callPublicFn(
+        contractName,
+        "record-reputation-event",
+        [Cl.uint(1), Cl.stringAscii(eventType), Cl.stringAscii(dataHash)],
+        wallet1
+      );
+
+      // Check if meets threshold (default is 100)
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "meets-reputation-threshold",
+        [Cl.uint(1)],
+        wallet1
+      );
+
+      expect(result).toBeBool(true);
+    });
+
+    it("should verify identity by reputation", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const eventType = "education-completion"; // Worth 100 points
+      const dataHash = "QmExampleHashForReputationData123456789012345678901234";
+      
+      // Create identity
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Record reputation event to meet threshold
+      simnet.callPublicFn(
+        contractName,
+        "record-reputation-event",
+        [Cl.uint(1), Cl.stringAscii(eventType), Cl.stringAscii(dataHash)],
+        wallet1
+      );
+
+      // Verify identity by reputation
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "verify-identity-by-reputation",
+        [Cl.uint(1)],
+        deployer // Contract owner
+      );
+
+      expect(result).toBeOk(Cl.bool(true));
+
+      // Check that identity is now verified
+      const identityResult = simnet.callReadOnlyFn(
+        contractName,
+        "get-identity",
+        [Cl.uint(1)],
+        wallet1
+      );
+
+      // Just verify the identity exists and the verification function worked
+      expect(identityResult.result).toBeSome(Cl.tuple({
+        "owner": Cl.principal(wallet1),
+        "created-at": Cl.uint(3),
+        "updated-at": Cl.uint(5),
+        "reputation-score": Cl.uint(100),
+        "is-verified": Cl.bool(true),
+        "metadata-hash": Cl.stringAscii(metadataHash)
+      }));
+    });
+
+    it("should fail to verify identity with insufficient reputation", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      
+      // Create identity without reputation events
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Try to verify identity by reputation
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "verify-identity-by-reputation",
+        [Cl.uint(1)],
+        deployer
+      );
+
+      expect(result).toBeErr(Cl.uint(406)); // ERR_INSUFFICIENT_REPUTATION
+    });
+
+    it("should set reputation threshold", () => {
+      const newThreshold = 200;
+      
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "set-reputation-threshold",
+        [Cl.uint(newThreshold)],
+        deployer // Only contract owner
+      );
+
+      expect(result).toBeOk(Cl.bool(true));
+    });
+
+    it("should prevent non-owner from setting reputation threshold", () => {
+      const newThreshold = 200;
+      
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "set-reputation-threshold",
+        [Cl.uint(newThreshold)],
+        wallet1 // Non-owner
+      );
+
+      expect(result).toBeErr(Cl.uint(401)); // ERR_UNAUTHORIZED
+    });
+
+    it("should accumulate reputation from multiple events", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const dataHash = "QmExampleHashForReputationData123456789012345678901234";
+      
+      // Create identity
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Record multiple reputation events
+      simnet.callPublicFn(
+        contractName,
+        "record-reputation-event",
+        [Cl.uint(1), Cl.stringAscii("github-contribution"), Cl.stringAscii(dataHash)],
+        wallet1
+      ); // +10 points
+
+      simnet.callPublicFn(
+        contractName,
+        "record-reputation-event",
+        [Cl.uint(1), Cl.stringAscii("peer-review"), Cl.stringAscii(dataHash)],
+        wallet1
+      ); // +25 points
+
+      simnet.callPublicFn(
+        contractName,
+        "record-reputation-event",
+        [Cl.uint(1), Cl.stringAscii("skill-verification"), Cl.stringAscii(dataHash)],
+        wallet1
+      ); // +50 points
+
+      // Check total reputation score (10 + 25 + 50 = 85)
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "get-reputation-score",
+        [Cl.uint(1)],
+        wallet1
+      );
+
+      expect(result).toBeUint(85);
+    });
+  });
 });
 
 
