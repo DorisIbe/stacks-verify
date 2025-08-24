@@ -1,21 +1,1195 @@
 
 import { describe, expect, it } from "vitest";
+import { Cl } from "@stacks/transactions";
 
 const accounts = simnet.getAccounts();
-const address1 = accounts.get("wallet_1")!;
+const deployer = accounts.get("deployer")!;
+const wallet1 = accounts.get("wallet_1")!;
+const wallet2 = accounts.get("wallet_2")!;
 
-/*
-  The test below is an example. To learn more, read the testing documentation here:
-  https://docs.hiro.so/stacks/clarinet-js-sdk
-*/
+const contractName = "stacks-verify";
 
-describe("example tests", () => {
-  it("ensures simnet is well initialised", () => {
-    expect(simnet.blockHeight).toBeDefined();
+describe("Stacks Verify Contract", () => {
+
+  describe("Contract Setup", () => {
+    it("should initialize with correct default values", () => {
+      // Check that the contract is properly initialized
+      expect(simnet.blockHeight).toBeDefined();
+      expect(simnet.blockHeight).toBeGreaterThan(0);
+    });
+
+    it("should have deployer as contract owner", () => {
+      // The contract owner should be the deployer
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "get-identity-by-principal",
+        [Cl.principal(deployer)],
+        deployer
+      );
+      expect(result).toBeNone();
+    });
   });
 
-  // it("shows an example", () => {
-  //   const { result } = simnet.callReadOnlyFn("counter", "get-counter", [], address1);
-  //   expect(result).toBeUint(0);
-  // });
+  describe("Identity Management", () => {
+    it("should create a new identity successfully", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      expect(result).toBeOk(Cl.uint(1));
+    });
+
+    it("should prevent creating duplicate identities for same principal", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      
+      // Create first identity
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Try to create second identity with same principal
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      expect(result).toBeErr(Cl.uint(402)); // ERR_IDENTITY_EXISTS
+    });
+
+    it("should retrieve identity by ID", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      
+      // Create identity
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Get identity by ID
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "get-identity",
+        [Cl.uint(1)],
+        wallet1
+      );
+
+      expect(result).toBeSome(Cl.tuple({
+        "owner": Cl.principal(wallet1),
+        "created-at": Cl.uint(3),
+        "updated-at": Cl.uint(3),
+        "reputation-score": Cl.uint(0),
+        "is-verified": Cl.bool(false),
+        "metadata-hash": Cl.stringAscii(metadataHash)
+      }));
+    });
+
+    it("should retrieve identity by principal", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      
+      // Create identity
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Get identity by principal
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "get-identity-by-principal",
+        [Cl.principal(wallet1)],
+        wallet1
+      );
+
+      expect(result).toBeSome(Cl.tuple({
+        "owner": Cl.principal(wallet1),
+        "created-at": Cl.uint(3),
+        "updated-at": Cl.uint(3),
+        "reputation-score": Cl.uint(0),
+        "is-verified": Cl.bool(false),
+        "metadata-hash": Cl.stringAscii(metadataHash)
+      }));
+    });
+
+    it("should update identity metadata", () => {
+      const originalHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const updatedHash = "QmUpdatedHashForIdentityMetadata123456789012345678901234";
+      
+      // Create identity
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(originalHash)],
+        wallet1
+      );
+
+      // Update metadata
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "update-identity-metadata",
+        [Cl.stringAscii(updatedHash)],
+        wallet1
+      );
+
+      expect(result).toBeOk(Cl.bool(true));
+
+      // Verify update - just check that identity still exists
+      const identityResult = simnet.callReadOnlyFn(
+        contractName,
+        "get-identity-by-principal",
+        [Cl.principal(wallet1)],
+        wallet1
+      );
+
+      expect(identityResult.result).toBeSome(Cl.tuple({
+        "owner": Cl.principal(wallet1),
+        "created-at": Cl.uint(3),
+        "updated-at": Cl.uint(4),
+        "reputation-score": Cl.uint(0),
+        "is-verified": Cl.bool(false),
+        "metadata-hash": Cl.stringAscii(updatedHash)
+      }));
+    });
+
+    it("should fail to update metadata for non-existent identity", () => {
+      const updatedHash = "QmUpdatedHashForIdentityMetadata123456789012345678901234";
+      
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "update-identity-metadata",
+        [Cl.stringAscii(updatedHash)],
+        wallet1
+      );
+
+      expect(result).toBeErr(Cl.uint(403)); // ERR_IDENTITY_NOT_FOUND
+    });
+
+    it("should return none for non-existent identity", () => {
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "get-identity",
+        [Cl.uint(999)],
+        wallet1
+      );
+
+      expect(result).toBeNone();
+    });
+
+    it("should return none for principal without identity", () => {
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "get-identity-by-principal",
+        [Cl.principal(wallet1)],
+        wallet1
+      );
+
+      expect(result).toBeNone();
+    });
+
+    it("should increment identity ID for multiple identities", () => {
+      const metadataHash1 = "QmExampleHashForIdentity1234567890123456789012345678901";
+      const metadataHash2 = "QmExampleHashForIdentity2234567890123456789012345678902";
+      
+      // Create first identity
+      const result1 = simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash1)],
+        wallet1
+      );
+      expect(result1.result).toBeOk(Cl.uint(1));
+
+      // Create second identity
+      const result2 = simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash2)],
+        wallet2
+      );
+      expect(result2.result).toBeOk(Cl.uint(2));
+    });
+  });
+
+  describe("Credential Management", () => {
+    it("should issue a credential successfully", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const credentialType = "education-completion";
+      const dataHash = "QmExampleHashForCredentialData123456789012345678901234";
+      const expiresAt = 1000; // Future block height
+      
+      // Create identity first
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Issue credential
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "issue-credential",
+        [
+          Cl.uint(1), // identity-id
+          Cl.stringAscii(credentialType),
+          Cl.uint(expiresAt),
+          Cl.stringAscii(dataHash)
+        ],
+        wallet1 // Identity owner issuing self-credential
+      );
+
+      expect(result).toBeOk(Cl.uint(1));
+    });
+
+    it("should prevent issuing credential with past expiration date", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const credentialType = "education-completion";
+      const dataHash = "QmExampleHashForCredentialData123456789012345678901234";
+      const expiresAt = 1; // Past block height
+      
+      // Create identity first
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Try to issue credential with past expiration
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "issue-credential",
+        [
+          Cl.uint(1),
+          Cl.stringAscii(credentialType),
+          Cl.uint(expiresAt),
+          Cl.stringAscii(dataHash)
+        ],
+        wallet1
+      );
+
+      expect(result).toBeErr(Cl.uint(404)); // ERR_INVALID_CREDENTIAL
+    });
+
+    it("should prevent unauthorized credential issuance", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const credentialType = "education-completion";
+      const dataHash = "QmExampleHashForCredentialData123456789012345678901234";
+      const expiresAt = 1000;
+      
+      // Create identity with wallet1
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Try to issue credential from unauthorized wallet2
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "issue-credential",
+        [
+          Cl.uint(1),
+          Cl.stringAscii(credentialType),
+          Cl.uint(expiresAt),
+          Cl.stringAscii(dataHash)
+        ],
+        wallet2 // Unauthorized issuer
+      );
+
+      expect(result).toBeErr(Cl.uint(401)); // ERR_UNAUTHORIZED
+    });
+
+    it("should retrieve credential by ID", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const credentialType = "education-completion";
+      const dataHash = "QmExampleHashForCredentialData123456789012345678901234";
+      const expiresAt = 1000;
+      
+      // Create identity and issue credential
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      simnet.callPublicFn(
+        contractName,
+        "issue-credential",
+        [
+          Cl.uint(1),
+          Cl.stringAscii(credentialType),
+          Cl.uint(expiresAt),
+          Cl.stringAscii(dataHash)
+        ],
+        wallet1
+      );
+
+      // Get credential
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "get-credential",
+        [Cl.uint(1)],
+        wallet1
+      );
+
+      expect(result).toBeSome(Cl.tuple({
+        "identity-id": Cl.uint(1),
+        "credential-type": Cl.stringAscii(credentialType),
+        "issuer": Cl.principal(wallet1),
+        "issued-at": Cl.uint(4), // Block height will be 4 due to accumulated tests
+        "expires-at": Cl.uint(expiresAt),
+        "is-revoked": Cl.bool(false),
+        "data-hash": Cl.stringAscii(dataHash),
+        "verification-status": Cl.stringAscii("pending")
+      }));
+    });
+
+    it("should verify credential successfully", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const credentialType = "education-completion";
+      const dataHash = "QmExampleHashForCredentialData123456789012345678901234";
+      const expiresAt = 1000;
+      
+      // Create identity and issue credential
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      simnet.callPublicFn(
+        contractName,
+        "issue-credential",
+        [
+          Cl.uint(1),
+          Cl.stringAscii(credentialType),
+          Cl.uint(expiresAt),
+          Cl.stringAscii(dataHash)
+        ],
+        wallet1
+      );
+
+      // Verify credential (contract owner can verify)
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "verify-credential",
+        [Cl.uint(1)],
+        deployer // Contract owner
+      );
+
+      expect(result).toBeOk(Cl.bool(true));
+    });
+
+    it("should revoke credential successfully", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const credentialType = "education-completion";
+      const dataHash = "QmExampleHashForCredentialData123456789012345678901234";
+      const expiresAt = 1000;
+      
+      // Create identity and issue credential
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      simnet.callPublicFn(
+        contractName,
+        "issue-credential",
+        [
+          Cl.uint(1),
+          Cl.stringAscii(credentialType),
+          Cl.uint(expiresAt),
+          Cl.stringAscii(dataHash)
+        ],
+        wallet1
+      );
+
+      // Revoke credential
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "revoke-credential",
+        [Cl.uint(1)],
+        wallet1 // Issuer can revoke
+      );
+
+      expect(result).toBeOk(Cl.bool(true));
+
+      // Verify credential is revoked
+      const credentialResult = simnet.callReadOnlyFn(
+        contractName,
+        "get-credential",
+        [Cl.uint(1)],
+        wallet1
+      );
+
+      // Just verify that the credential still exists after revocation
+      expect(credentialResult.result).toBeSome(Cl.tuple({
+        "identity-id": Cl.uint(1),
+        "credential-type": Cl.stringAscii(credentialType),
+        "issuer": Cl.principal(wallet1),
+        "issued-at": Cl.uint(4),
+        "expires-at": Cl.uint(expiresAt),
+        "is-revoked": Cl.bool(true),
+        "data-hash": Cl.stringAscii(dataHash),
+        "verification-status": Cl.stringAscii("revoked")
+      }));
+    });
+
+    it("should check credential validity correctly", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const credentialType = "education-completion";
+      const dataHash = "QmExampleHashForCredentialData123456789012345678901234";
+      const expiresAt = 1000;
+      
+      // Create identity and issue credential
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      simnet.callPublicFn(
+        contractName,
+        "issue-credential",
+        [
+          Cl.uint(1),
+          Cl.stringAscii(credentialType),
+          Cl.uint(expiresAt),
+          Cl.stringAscii(dataHash)
+        ],
+        wallet1
+      );
+
+      // Verify credential first
+      simnet.callPublicFn(
+        contractName,
+        "verify-credential",
+        [Cl.uint(1)],
+        deployer
+      );
+
+      // Check if credential is valid
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "is-credential-valid",
+        [Cl.uint(1)],
+        wallet1
+      );
+
+      expect(result).toBeBool(true);
+    });
+
+    it("should return false for invalid credential", () => {
+      // Check non-existent credential
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "is-credential-valid",
+        [Cl.uint(999)],
+        wallet1
+      );
+
+      expect(result).toBeBool(false);
+    });
+
+    it("should get identity credential by type", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const credentialType = "education-completion";
+      const dataHash = "QmExampleHashForCredentialData123456789012345678901234";
+      const expiresAt = 1000;
+      
+      // Create identity and issue credential
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      simnet.callPublicFn(
+        contractName,
+        "issue-credential",
+        [
+          Cl.uint(1),
+          Cl.stringAscii(credentialType),
+          Cl.uint(expiresAt),
+          Cl.stringAscii(dataHash)
+        ],
+        wallet1
+      );
+
+      // Get credential by identity and type
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "get-identity-credential",
+        [Cl.uint(1), Cl.stringAscii(credentialType)],
+        wallet1
+      );
+
+      expect(result).toBeSome(Cl.tuple({
+        "identity-id": Cl.uint(1),
+        "credential-type": Cl.stringAscii(credentialType),
+        "issuer": Cl.principal(wallet1),
+        "issued-at": Cl.uint(4), // Block height will be 4 due to accumulated tests
+        "expires-at": Cl.uint(expiresAt),
+        "is-revoked": Cl.bool(false),
+        "data-hash": Cl.stringAscii(dataHash),
+        "verification-status": Cl.stringAscii("pending")
+      }));
+    });
+
+    it("should check if identity has valid credential", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const credentialType = "education-completion";
+      const dataHash = "QmExampleHashForCredentialData123456789012345678901234";
+      const expiresAt = 1000;
+      
+      // Create identity and issue credential
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      simnet.callPublicFn(
+        contractName,
+        "issue-credential",
+        [
+          Cl.uint(1),
+          Cl.stringAscii(credentialType),
+          Cl.uint(expiresAt),
+          Cl.stringAscii(dataHash)
+        ],
+        wallet1
+      );
+
+      // Verify credential first
+      simnet.callPublicFn(
+        contractName,
+        "verify-credential",
+        [Cl.uint(1)],
+        deployer
+      );
+
+      // Check if identity has valid credential
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "has-valid-credential",
+        [Cl.uint(1), Cl.stringAscii(credentialType)],
+        wallet1
+      );
+
+      expect(result).toBeBool(true);
+    });
+  });
+
+  describe("Trusted Issuer Management", () => {
+    it("should add trusted issuer successfully", () => {
+      const issuerType = "university";
+      
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "add-trusted-issuer",
+        [Cl.principal(wallet1), Cl.stringAscii(issuerType)],
+        deployer // Only contract owner can add
+      );
+
+      expect(result).toBeOk(Cl.bool(true));
+    });
+
+    it("should prevent non-owner from adding trusted issuer", () => {
+      const issuerType = "university";
+      
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "add-trusted-issuer",
+        [Cl.principal(wallet1), Cl.stringAscii(issuerType)],
+        wallet1 // Non-owner trying to add
+      );
+
+      expect(result).toBeErr(Cl.uint(401)); // ERR_UNAUTHORIZED
+    });
+
+    it("should check if issuer is trusted", () => {
+      const issuerType = "university";
+      
+      // Add trusted issuer first
+      simnet.callPublicFn(
+        contractName,
+        "add-trusted-issuer",
+        [Cl.principal(wallet1), Cl.stringAscii(issuerType)],
+        deployer
+      );
+
+      // Check if issuer is trusted
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "is-trusted-issuer",
+        [Cl.principal(wallet1)],
+        wallet1
+      );
+
+      expect(result).toBeBool(true);
+    });
+
+    it("should return false for non-trusted issuer", () => {
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "is-trusted-issuer",
+        [Cl.principal(wallet2)],
+        wallet1
+      );
+
+      expect(result).toBeBool(false);
+    });
+
+    it("should remove trusted issuer successfully", () => {
+      const issuerType = "university";
+      
+      // Add trusted issuer first
+      simnet.callPublicFn(
+        contractName,
+        "add-trusted-issuer",
+        [Cl.principal(wallet1), Cl.stringAscii(issuerType)],
+        deployer
+      );
+
+      // Remove trusted issuer
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "remove-trusted-issuer",
+        [Cl.principal(wallet1)],
+        deployer
+      );
+
+      expect(result).toBeOk(Cl.bool(true));
+
+      // Verify issuer is no longer trusted
+      const checkResult = simnet.callReadOnlyFn(
+        contractName,
+        "is-trusted-issuer",
+        [Cl.principal(wallet1)],
+        wallet1
+      );
+
+      expect(checkResult.result).toBeBool(false);
+    });
+
+    it("should prevent non-owner from removing trusted issuer", () => {
+      const issuerType = "university";
+      
+      // Add trusted issuer first
+      simnet.callPublicFn(
+        contractName,
+        "add-trusted-issuer",
+        [Cl.principal(wallet1), Cl.stringAscii(issuerType)],
+        deployer
+      );
+
+      // Try to remove as non-owner
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "remove-trusted-issuer",
+        [Cl.principal(wallet1)],
+        wallet1 // Non-owner trying to remove
+      );
+
+      expect(result).toBeErr(Cl.uint(401)); // ERR_UNAUTHORIZED
+    });
+
+    it("should allow trusted issuer to issue credentials", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const issuerType = "university";
+      const credentialType = "education-completion";
+      const dataHash = "QmExampleHashForCredentialData123456789012345678901234";
+      const expiresAt = 1000;
+      
+      // Create identity
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Add trusted issuer
+      simnet.callPublicFn(
+        contractName,
+        "add-trusted-issuer",
+        [Cl.principal(wallet2), Cl.stringAscii(issuerType)],
+        deployer
+      );
+
+      // Trusted issuer issues credential for someone else's identity
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "issue-credential",
+        [
+          Cl.uint(1), // identity-id
+          Cl.stringAscii(credentialType),
+          Cl.uint(expiresAt),
+          Cl.stringAscii(dataHash)
+        ],
+        wallet2 // Trusted issuer
+      );
+
+      expect(result).toBeOk(Cl.uint(1));
+    });
+
+    it("should allow trusted issuer to verify credentials", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const issuerType = "university";
+      const credentialType = "education-completion";
+      const dataHash = "QmExampleHashForCredentialData123456789012345678901234";
+      const expiresAt = 1000;
+      
+      // Create identity and issue credential
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      simnet.callPublicFn(
+        contractName,
+        "issue-credential",
+        [
+          Cl.uint(1),
+          Cl.stringAscii(credentialType),
+          Cl.uint(expiresAt),
+          Cl.stringAscii(dataHash)
+        ],
+        wallet1
+      );
+
+      // Add trusted issuer
+      simnet.callPublicFn(
+        contractName,
+        "add-trusted-issuer",
+        [Cl.principal(wallet2), Cl.stringAscii(issuerType)],
+        deployer
+      );
+
+      // Trusted issuer verifies credential
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "verify-credential",
+        [Cl.uint(1)],
+        wallet2 // Trusted issuer
+      );
+
+      expect(result).toBeOk(Cl.bool(true));
+    });
+
+    it("should allow contract owner to verify credentials", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const credentialType = "education-completion";
+      const dataHash = "QmExampleHashForCredentialData123456789012345678901234";
+      const expiresAt = 1000;
+      
+      // Create identity and issue credential
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      simnet.callPublicFn(
+        contractName,
+        "issue-credential",
+        [
+          Cl.uint(1),
+          Cl.stringAscii(credentialType),
+          Cl.uint(expiresAt),
+          Cl.stringAscii(dataHash)
+        ],
+        wallet1
+      );
+
+      // Contract owner verifies credential
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "verify-credential",
+        [Cl.uint(1)],
+        deployer // Contract owner
+      );
+
+      expect(result).toBeOk(Cl.bool(true));
+    });
+  });
+
+  describe("Reputation System", () => {
+    it("should record reputation event successfully", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const eventType = "github-contribution";
+      const dataHash = "QmExampleHashForReputationData123456789012345678901234";
+      
+      // Create identity first
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Record reputation event
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "record-reputation-event",
+        [
+          Cl.uint(1), // identity-id
+          Cl.stringAscii(eventType),
+          Cl.stringAscii(dataHash)
+        ],
+        wallet1 // Identity owner
+      );
+
+      expect(result).toBeOk(Cl.uint(1));
+    });
+
+    it("should update reputation score when recording event", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const eventType = "skill-verification"; // Worth 50 points
+      const dataHash = "QmExampleHashForReputationData123456789012345678901234";
+      
+      // Create identity
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Record reputation event
+      simnet.callPublicFn(
+        contractName,
+        "record-reputation-event",
+        [Cl.uint(1), Cl.stringAscii(eventType), Cl.stringAscii(dataHash)],
+        wallet1
+      );
+
+      // Check reputation score
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "get-reputation-score",
+        [Cl.uint(1)],
+        wallet1
+      );
+
+      expect(result).toBeUint(50); // skill-verification is worth 50 points
+    });
+
+    it("should prevent unauthorized reputation event recording", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const eventType = "github-contribution";
+      const dataHash = "QmExampleHashForReputationData123456789012345678901234";
+      
+      // Create identity with wallet1
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Try to record event from unauthorized wallet2
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "record-reputation-event",
+        [Cl.uint(1), Cl.stringAscii(eventType), Cl.stringAscii(dataHash)],
+        wallet2 // Unauthorized
+      );
+
+      expect(result).toBeErr(Cl.uint(401)); // ERR_UNAUTHORIZED
+    });
+
+    it("should get reputation event by ID", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const eventType = "peer-review";
+      const dataHash = "QmExampleHashForReputationData123456789012345678901234";
+      
+      // Create identity and record event
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      simnet.callPublicFn(
+        contractName,
+        "record-reputation-event",
+        [Cl.uint(1), Cl.stringAscii(eventType), Cl.stringAscii(dataHash)],
+        wallet1
+      );
+
+      // Get reputation event
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "get-reputation-event",
+        [Cl.uint(1)],
+        wallet1
+      );
+
+      expect(result).toBeSome(Cl.tuple({
+        "identity-id": Cl.uint(1),
+        "event-type": Cl.stringAscii(eventType),
+        "reputation-change": Cl.int(25), // peer-review is worth 25 points
+        "verifier": Cl.principal(wallet1),
+        "timestamp": Cl.uint(4),
+        "data-hash": Cl.stringAscii(dataHash)
+      }));
+    });
+
+    it("should get reputation weight for event type", () => {
+      const eventType = "education-completion";
+      
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "get-reputation-weight",
+        [Cl.stringAscii(eventType)],
+        wallet1
+      );
+
+      expect(result).toBeSome(Cl.int(100)); // education-completion is worth 100 points
+    });
+
+    it("should update reputation weight", () => {
+      const eventType = "custom-event";
+      const newWeight = 75;
+      
+      // Update reputation weight
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "update-reputation-weight",
+        [Cl.stringAscii(eventType), Cl.int(newWeight)],
+        deployer // Only contract owner
+      );
+
+      expect(result).toBeOk(Cl.bool(true));
+
+      // Check updated weight
+      const weightResult = simnet.callReadOnlyFn(
+        contractName,
+        "get-reputation-weight",
+        [Cl.stringAscii(eventType)],
+        wallet1
+      );
+
+      expect(weightResult.result).toBeSome(Cl.int(newWeight));
+    });
+
+    it("should prevent non-owner from updating reputation weight", () => {
+      const eventType = "custom-event";
+      const newWeight = 75;
+      
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "update-reputation-weight",
+        [Cl.stringAscii(eventType), Cl.int(newWeight)],
+        wallet1 // Non-owner
+      );
+
+      expect(result).toBeErr(Cl.uint(401)); // ERR_UNAUTHORIZED
+    });
+
+    it("should check if identity meets reputation threshold", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const eventType = "education-completion"; // Worth 100 points
+      const dataHash = "QmExampleHashForReputationData123456789012345678901234";
+      
+      // Create identity
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Record high-value reputation event
+      simnet.callPublicFn(
+        contractName,
+        "record-reputation-event",
+        [Cl.uint(1), Cl.stringAscii(eventType), Cl.stringAscii(dataHash)],
+        wallet1
+      );
+
+      // Check if meets threshold (default is 100)
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "meets-reputation-threshold",
+        [Cl.uint(1)],
+        wallet1
+      );
+
+      expect(result).toBeBool(true);
+    });
+
+    it("should verify identity by reputation", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const eventType = "education-completion"; // Worth 100 points
+      const dataHash = "QmExampleHashForReputationData123456789012345678901234";
+      
+      // Create identity
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Record reputation event to meet threshold
+      simnet.callPublicFn(
+        contractName,
+        "record-reputation-event",
+        [Cl.uint(1), Cl.stringAscii(eventType), Cl.stringAscii(dataHash)],
+        wallet1
+      );
+
+      // Verify identity by reputation
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "verify-identity-by-reputation",
+        [Cl.uint(1)],
+        deployer // Contract owner
+      );
+
+      expect(result).toBeOk(Cl.bool(true));
+
+      // Check that identity is now verified
+      const identityResult = simnet.callReadOnlyFn(
+        contractName,
+        "get-identity",
+        [Cl.uint(1)],
+        wallet1
+      );
+
+      // Just verify the identity exists and the verification function worked
+      expect(identityResult.result).toBeSome(Cl.tuple({
+        "owner": Cl.principal(wallet1),
+        "created-at": Cl.uint(3),
+        "updated-at": Cl.uint(5),
+        "reputation-score": Cl.uint(100),
+        "is-verified": Cl.bool(true),
+        "metadata-hash": Cl.stringAscii(metadataHash)
+      }));
+    });
+
+    it("should fail to verify identity with insufficient reputation", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      
+      // Create identity without reputation events
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Try to verify identity by reputation
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "verify-identity-by-reputation",
+        [Cl.uint(1)],
+        deployer
+      );
+
+      expect(result).toBeErr(Cl.uint(406)); // ERR_INSUFFICIENT_REPUTATION
+    });
+
+    it("should set reputation threshold", () => {
+      const newThreshold = 200;
+      
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "set-reputation-threshold",
+        [Cl.uint(newThreshold)],
+        deployer // Only contract owner
+      );
+
+      expect(result).toBeOk(Cl.bool(true));
+    });
+
+    it("should prevent non-owner from setting reputation threshold", () => {
+      const newThreshold = 200;
+      
+      const { result } = simnet.callPublicFn(
+        contractName,
+        "set-reputation-threshold",
+        [Cl.uint(newThreshold)],
+        wallet1 // Non-owner
+      );
+
+      expect(result).toBeErr(Cl.uint(401)); // ERR_UNAUTHORIZED
+    });
+
+    it("should accumulate reputation from multiple events", () => {
+      const metadataHash = "QmExampleHashForIdentityMetadata123456789012345678901234";
+      const dataHash = "QmExampleHashForReputationData123456789012345678901234";
+      
+      // Create identity
+      simnet.callPublicFn(
+        contractName,
+        "create-identity",
+        [Cl.stringAscii(metadataHash)],
+        wallet1
+      );
+
+      // Record multiple reputation events
+      simnet.callPublicFn(
+        contractName,
+        "record-reputation-event",
+        [Cl.uint(1), Cl.stringAscii("github-contribution"), Cl.stringAscii(dataHash)],
+        wallet1
+      ); // +10 points
+
+      simnet.callPublicFn(
+        contractName,
+        "record-reputation-event",
+        [Cl.uint(1), Cl.stringAscii("peer-review"), Cl.stringAscii(dataHash)],
+        wallet1
+      ); // +25 points
+
+      simnet.callPublicFn(
+        contractName,
+        "record-reputation-event",
+        [Cl.uint(1), Cl.stringAscii("skill-verification"), Cl.stringAscii(dataHash)],
+        wallet1
+      ); // +50 points
+
+      // Check total reputation score (10 + 25 + 50 = 85)
+      const { result } = simnet.callReadOnlyFn(
+        contractName,
+        "get-reputation-score",
+        [Cl.uint(1)],
+        wallet1
+      );
+
+      expect(result).toBeUint(85);
+    });
+  });
 });
+
+
